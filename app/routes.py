@@ -2,13 +2,15 @@ from fastapi import APIRouter, UploadFile, HTTPException
 from app.services import analyze_receipt
 from db.init import create_supabase_client
 from pydantic import BaseModel
+from typing import List
+from app.config import SAMPLE_UUID
+from app.services import upload_file_to_supabase
 
 router = APIRouter()
 supabase = create_supabase_client()
 class LoginRequest(BaseModel):
   email: str
   password: str
-
 
 @router.post("/login/")
 async def login(user: LoginRequest):
@@ -32,12 +34,12 @@ async def login(user: LoginRequest):
     raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 @router.post("/analyze_receipt/")
-async def analyze(file: UploadFile):
+async def analyze(file: UploadFile, friends: List[str]):
 	try:
 		receipt_data = await analyze_receipt(file)
 
 		receipt_insert = {
-      "user_id": "16f79ec9-58d4-4ac2-91aa-170f771a96f5",
+      "user_id": SAMPLE_UUID,
 			"restaurant_name": receipt_data["restaurant_name"],
 			"total_amount": receipt_data["total_amount"],
 			"tax": receipt_data["tax"],
@@ -46,7 +48,7 @@ async def analyze(file: UploadFile):
 		}
 
 		receipt_response = supabase.table("receipts").insert(receipt_insert).execute()
-		print(receipt_response)
+        
 		if not receipt_response.data:
 			raise Exception("Failed to insert receipt.")
 
@@ -73,3 +75,28 @@ async def analyze(file: UploadFile):
 
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+     
+@router.post("/friend")
+async def add_friend(name: str, photo: UploadFile):
+  try:
+    url, error = await upload_file_to_supabase(file=photo, bucket_name="friend-photo")
+    if error:
+      raise HTTPException(
+        status_code=400 if "must be an image" in error else 500,
+        detail=error
+      )
+    friend_insert = {
+      "user_id": SAMPLE_UUID,
+      "name": name,
+      "photo": url
+    }
+    supabase.table("friends").insert(friend_insert).execute()
+    return {
+      "message": "Friend uploaded successfully.",
+      "data": friend_insert
+    }
+  except HTTPException as http_err:
+    raise http_err
+  except Exception as e:
+    raise HTTPException(status_code=500, detail=f"Failed adding friend: {str(e)}")
+  

@@ -12,6 +12,7 @@ class LoginRequest(BaseModel):
   email: str
   password: str
 
+
 @router.post("/login/")
 async def login(user: LoginRequest):
   try:
@@ -48,7 +49,7 @@ async def analyze(file: UploadFile, friends: List[str]):
 		}
 
 		receipt_response = supabase.table("receipts").insert(receipt_insert).execute()
-        
+		print(receipt_response)
 		if not receipt_response.data:
 			raise Exception("Failed to insert receipt.")
 
@@ -79,24 +80,22 @@ async def analyze(file: UploadFile, friends: List[str]):
 @router.post("/friend")
 async def add_friend(name: str, photo: UploadFile):
   try:
-    url, error = await upload_file_to_supabase(file=photo, bucket_name="friend-photo")
+    url, error = await upload_file_to_supabase(supabase, photo, "friend-photo")
     if error:
       raise HTTPException(
         status_code=400 if "must be an image" in error else 500,
         detail=error
       )
+
     friend_insert = {
       "user_id": SAMPLE_UUID,
       "name": name,
       "photo": url
     }
     supabase.table("friends").insert(friend_insert).execute()
-    return {
-      "message": "Friend uploaded successfully.",
-      "data": friend_insert
-    }
-  except HTTPException as http_err:
-    raise http_err
+    return { "message": "Friend uploaded successfully.", "data": friend_insert}
+  except HTTPException as http_error:
+    raise http_error
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Failed adding friend: {str(e)}")
   

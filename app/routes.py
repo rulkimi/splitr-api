@@ -35,12 +35,12 @@ async def login(user: LoginRequest):
     raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 @router.post("/analyze_receipt/")
-async def analyze(file: UploadFile, friends: List[str]):
+async def analyze(file: UploadFile):
 	try:
 		receipt_data = await analyze_receipt(file)
 
 		receipt_insert = {
-      "user_id": SAMPLE_UUID,
+			"user_id": SAMPLE_UUID,
 			"restaurant_name": receipt_data["restaurant_name"],
 			"total_amount": receipt_data["total_amount"],
 			"tax": receipt_data["tax"],
@@ -63,16 +63,25 @@ async def analyze(file: UploadFile, friends: List[str]):
 				"unit_price": item["unit_price"],
 				"variation": item.get("variation", [])
 			}
-				
 			supabase.table("items").insert(item_insert).execute()
+      
+		friends = ["13830888-9fb7-4822-ae2f-e7ecb0057ecf", "9fc0b693-33fb-402d-bb4e-fb7f39eab310"]
+  
+		for friend in friends:
+			receipt_friends_insert = {
+				"receipt_id": receipt_id,
+        "friend_id": friend,
+        "amount_paid": 0
+			}
+			supabase.table("receipt_friends").insert(receipt_friends_insert).execute()
 
 		return {
-      "message": "Receipt and items inserted successfully.",
-      "data": {
-        "receipt_id": receipt_id,
-        "receipt_data": receipt_data,
-      }
-    }
+			"message": "Receipt and items inserted successfully.",
+			"data": {
+				"receipt_id": receipt_id,
+				"receipt_data": receipt_data,
+			}
+		}
 
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
@@ -98,4 +107,3 @@ async def add_friend(name: str, photo: UploadFile):
     raise http_error
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Failed adding friend: {str(e)}")
-  

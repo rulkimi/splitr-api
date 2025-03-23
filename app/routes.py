@@ -12,7 +12,6 @@ class LoginRequest(BaseModel):
   email: str
   password: str
 
-
 @router.post("/login/")
 async def login(user: LoginRequest):
   try:
@@ -33,6 +32,14 @@ async def login(user: LoginRequest):
 
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
+
+@router.post("/logout/")
+async def logout():
+    try:
+        auth_response = supabase.auth.sign_out()
+        return {"message": "Logout successful"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Logout failed: {str(e)}")
 
 @router.post("/analyze_receipt/")
 async def analyze(file: UploadFile):
@@ -85,7 +92,7 @@ async def analyze(file: UploadFile):
 
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-     
+         
 @router.post("/friend")
 async def add_friend(name: str, photo: UploadFile):
   try:
@@ -107,3 +114,19 @@ async def add_friend(name: str, photo: UploadFile):
     raise http_error
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Failed adding friend: {str(e)}")
+
+@router.get("/friends/")
+async def get_all_friends(user_id: str):
+    try:
+        friends = supabase.table("friends").select("*").eq("user_id", user_id).execute().data
+        return {"friends": friends}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get friends: {str(e)}")
+
+@router.get("/receipts/")
+async def get_all_receipts(user_id: str):
+    try:
+        receipts = supabase.table("receipts").select("*").eq("user_id", user_id).execute().data
+        return {"receipts": receipts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get receipts: {str(e)}")

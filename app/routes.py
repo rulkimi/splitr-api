@@ -12,6 +12,10 @@ class LoginRequest(BaseModel):
   email: str
   password: str
 
+class AnalyzeRequest(BaseModel):
+  user_id: str
+  friends: List[str]
+
 @router.post("/login/")
 async def login(user: LoginRequest):
   try:
@@ -42,12 +46,12 @@ async def logout():
         raise HTTPException(status_code=500, detail=f"Logout failed: {str(e)}")
 
 @router.post("/analyze_receipt/")
-async def analyze(file: UploadFile):
+async def analyze(data: AnalyzeRequest, file: UploadFile):
 	try:
 		receipt_data = await analyze_receipt(file)
 
 		receipt_insert = {
-			"user_id": SAMPLE_UUID,
+			"user_id": data.user_id,
 			"restaurant_name": receipt_data["restaurant_name"],
 			"total_amount": receipt_data["total_amount"],
 			"tax": receipt_data["tax"],
@@ -71,10 +75,8 @@ async def analyze(file: UploadFile):
 				"variation": item.get("variation", [])
 			}
 			supabase.table("items").insert(item_insert).execute()
-      
-		friends = ["13830888-9fb7-4822-ae2f-e7ecb0057ecf", "9fc0b693-33fb-402d-bb4e-fb7f39eab310"]
   
-		for friend in friends:
+		for friend in data.friends:
 			receipt_friends_insert = {
 				"receipt_id": receipt_id,
         "friend_id": friend,
@@ -93,40 +95,81 @@ async def analyze(file: UploadFile):
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
          
-@router.post("/friend")
-async def add_friend(name: str, photo: UploadFile):
-  try:
-    url, error = await upload_file_to_supabase(supabase, photo, "friend-photo")
-    if error:
-      raise HTTPException(
-        status_code=400 if "must be an image" in error else 500,
-        detail=error
-      )
+from fastapi import UploadFile, File, Form, Depends
 
-    friend_insert = {
-      "user_id": SAMPLE_UUID,
-      "name": name,
-      "photo": url
-    }
-    supabase.table("friends").insert(friend_insert).execute()
-    return { "message": "Friend uploaded successfully.", "data": friend_insert}
-  except HTTPException as http_error:
-    raise http_error
-  except Exception as e:
-    raise HTTPException(status_code=500, detail=f"Failed adding friend: {str(e)}")
+@router.post("/friend")
+async def add_friend(
+    user_id: str = Form(...),
+    name: str = Form(...),
+    photo: UploadFile = File(None)
+):
+    try:
+        url = None
+        if photo:
+            url, error = await upload_file_to_supabase(supabase, photo, "friend-photo")
+            if error:
+                raise HTTPException(
+                    status_code=400 if "must be an image" in error else 500,
+                    detail=error
+                )
+
+        friend_insert = {
+            "user_id": user_id,
+            "name": name,
+            "photo": url
+        }
+
+        supabase.table("friends").insert(friend_insert).execute()
+        return {"message": "Friend uploaded successfully.", "data": friend_insert}
+
+    except HTTPException as http_error:
+        raise http_error
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed adding friend: {str(e)}")
 
 @router.get("/friends/")
 async def get_all_friends(user_id: str):
-    try:
-        friends = supabase.table("friends").select("*").eq("user_id", user_id).execute().data
-        return {"friends": friends}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get friends: {str(e)}")
+  try:
+      friends = supabase.table("friends").select("*").eq("user_id", user_id).execute().data
+      return {"friends": friends}
+  except Exception as e:
+      raise HTTPException(status_code=500, detail=f"Failed to get friends: {str(e)}")
 
 @router.get("/receipts/")
 async def get_all_receipts(user_id: str):
     try:
         receipts = supabase.table("receipts").select("*").eq("user_id", user_id).execute().data
+        if not receipts:
+            return {"receipts": []}
+
+        # Get all receipt IDs
+        receipt_ids = [receipt["id"] for receipt in receipts]
+
+        friends_data = supabase.table("receipt_friends").select("receipt_id, friend_id").in_("receipt_id", receipt_ids).execute().data
+
+        # Get all unique friend IDs
+        friend_ids = list(set(friend["friend_id"] for friend in friends_data))
+
+        friends_details = supabase.table("friends").select("id, name, photo").in_("id", friend_ids).execute().data
+
+        # Convert friends_details into a lookup dictionary
+        friends_map = {friend["id"]: friend for friend in friends_details}
+
+        # Organize friends by receipt_id
+        receipt_friends_map = {}
+        for entry in friends_data:
+            receipt_id = entry["receipt_id"]
+            friend_id = entry["friend_id"]
+            if receipt_id not in receipt_friends_map:
+                receipt_friends_map[receipt_id] = []
+            if friend_id in friends_map:  # Ensure the friend exists in the friends table
+                receipt_friends_map[receipt_id].append(friends_map[friend_id])
+
+        # Merge friends into receipts
+        receipts = [{**receipt, "friends": receipt_friends_map.get(receipt["id"], [])} for receipt in receipts]
+
         return {"receipts": receipts}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get receipts: {str(e)}")
+    

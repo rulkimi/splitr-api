@@ -1,7 +1,7 @@
-from fastapi import APIRouter, UploadFile, HTTPException
+from fastapi import APIRouter, UploadFile, HTTPException, Form, File
 from app.services import analyze_receipt
 from db.init import create_supabase_client
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 from typing import List
 from app.config import SAMPLE_UUID
 from app.services import upload_file_to_supabase
@@ -11,10 +11,6 @@ supabase = create_supabase_client()
 class LoginRequest(BaseModel):
   email: str
   password: str
-
-class AnalyzeRequest(BaseModel):
-  user_id: str
-  friends: List[str]
 
 @router.post("/login/")
 async def login(user: LoginRequest):
@@ -46,56 +42,58 @@ async def logout():
         raise HTTPException(status_code=500, detail=f"Logout failed: {str(e)}")
 
 @router.post("/analyze_receipt/")
-async def analyze(data: AnalyzeRequest, file: UploadFile):
-	try:
-		receipt_data = await analyze_receipt(file)
+async def analyze(user_id: str, friends: List[str], file: UploadFile):
+    print(f"Received user_id: {user_id}")
+    print(f"Received friends: {friends}")
+    print(f"Received file: {file.filename}, Content-Type: {file.content_type}")
+    try:
+        receipt_data = await analyze_receipt(file)
 
-		receipt_insert = {
-			"user_id": data.user_id,
-			"restaurant_name": receipt_data["restaurant_name"],
-			"total_amount": receipt_data["total_amount"],
-			"tax": receipt_data["tax"],
-			"service_charge": receipt_data["service_charge"],
-			"currency": receipt_data["currency"]
-		}
+        receipt_insert = {
+            "user_id": user_id,
+            "restaurant_name": receipt_data["restaurant_name"],
+            "total_amount": receipt_data["total_amount"],
+            "tax": receipt_data["tax"],
+            "service_charge": receipt_data["service_charge"],
+            "currency": receipt_data["currency"]
+        }
 
-		receipt_response = supabase.table("receipts").insert(receipt_insert).execute()
-		print(receipt_response)
-		if not receipt_response.data:
-			raise Exception("Failed to insert receipt.")
+        receipt_response = supabase.table("receipts").insert(receipt_insert).execute()
+        print(receipt_response)
+        if not receipt_response.data:
+            raise Exception("Failed to insert receipt.")
 
-		receipt_id = receipt_response.data[0]["id"] 
+        receipt_id = receipt_response.data[0]["id"] 
 
-		for item in receipt_data["items"]:
-			item_insert = {
-				"receipt_id": receipt_id,
-				"item_name": item["item_name"],
-				"quantity": item["quantity"],
-				"unit_price": item["unit_price"],
-				"variation": item.get("variation", [])
-			}
-			supabase.table("items").insert(item_insert).execute()
+        for item in receipt_data["items"]:
+            item_insert = {
+                "receipt_id": receipt_id,
+                "item_name": item["item_name"],
+                "quantity": item["quantity"],
+                "unit_price": item["unit_price"],
+                "variation": item.get("variation", [])
+            }
+            supabase.table("items").insert(item_insert).execute()
   
-		for friend in data.friends:
-			receipt_friends_insert = {
-				"receipt_id": receipt_id,
+        for friend in friends:
+            receipt_friends_insert = {
+                "receipt_id": receipt_id,
         "friend_id": friend,
         "amount_paid": 0
-			}
-			supabase.table("receipt_friends").insert(receipt_friends_insert).execute()
+            }
+            supabase.table("receipt_friends").insert(receipt_friends_insert).execute()
 
-		return {
-			"message": "Receipt and items inserted successfully.",
-			"data": {
-				"receipt_id": receipt_id,
-				"receipt_data": receipt_data,
-			}
-		}
+        return {
+            "message": "Receipt and items inserted successfully.",
+            "data": {
+                "receipt_id": receipt_id,
+                "receipt_data": receipt_data,
+            }
+        }
 
-	except Exception as e:
-		raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
          
-from fastapi import UploadFile, File, Form, Depends
 
 @router.post("/friend")
 async def add_friend(
@@ -142,34 +140,42 @@ async def get_all_receipts(user_id: str):
         if not receipts:
             return {"receipts": []}
 
-        # Get all receipt IDs
         receipt_ids = [receipt["id"] for receipt in receipts]
 
+        # --- Fetch and organize receipt friends ---
         friends_data = supabase.table("receipt_friends").select("receipt_id, friend_id").in_("receipt_id", receipt_ids).execute().data
-
-        # Get all unique friend IDs
         friend_ids = list(set(friend["friend_id"] for friend in friends_data))
-
         friends_details = supabase.table("friends").select("id, name, photo").in_("id", friend_ids).execute().data
-
-        # Convert friends_details into a lookup dictionary
         friends_map = {friend["id"]: friend for friend in friends_details}
 
-        # Organize friends by receipt_id
         receipt_friends_map = {}
         for entry in friends_data:
-            receipt_id = entry["receipt_id"]
-            friend_id = entry["friend_id"]
-            if receipt_id not in receipt_friends_map:
-                receipt_friends_map[receipt_id] = []
-            if friend_id in friends_map:  # Ensure the friend exists in the friends table
-                receipt_friends_map[receipt_id].append(friends_map[friend_id])
+            rid = entry["receipt_id"]
+            fid = entry["friend_id"]
+            if rid not in receipt_friends_map:
+                receipt_friends_map[rid] = []
+            if fid in friends_map:
+                receipt_friends_map[rid].append(friends_map[fid])
 
-        # Merge friends into receipts
-        receipts = [{**receipt, "friends": receipt_friends_map.get(receipt["id"], [])} for receipt in receipts]
+        # --- Fetch and organize receipt items ---
+        items_data = supabase.table("items").select("*").in_("receipt_id", receipt_ids).execute().data
+        items_map = {}
+        for item in items_data:
+            rid = item["receipt_id"]
+            if rid not in items_map:
+                items_map[rid] = []
+            items_map[rid].append(item)
+
+        # --- Combine everything ---
+        receipts = [{
+            **receipt,
+            "friends": receipt_friends_map.get(receipt["id"], []),
+            "items": items_map.get(receipt["id"], [])
+        } for receipt in receipts]
 
         return {"receipts": receipts}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get receipts: {str(e)}")
+
     

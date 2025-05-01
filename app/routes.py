@@ -166,11 +166,33 @@ async def get_all_receipts(user_id: str):
                 items_map[rid] = []
             items_map[rid].append(item)
 
+        # --- Fetch and organize item friends ---
+        item_ids = [item["id"] for items in items_map.values() for item in items]
+        friend_items_data = supabase.table("friend_items").select("item_id, friend_id, share_percentage, amount").in_("item_id", item_ids).execute().data
+        
+        item_friends_map = {}
+        for entry in friend_items_data:
+            item_id = entry["item_id"]
+            friend_id = entry["friend_id"]
+            if item_id not in item_friends_map:
+                item_friends_map[item_id] = []
+            if friend_id in friends_map:
+                friend_data = {
+                    **friends_map[friend_id],
+                    "share_percentage": entry["share_percentage"],
+                    "amount": entry["amount"]
+                }
+                item_friends_map[item_id].append(friend_data)
+
+        print(item_friends_map)
         # --- Combine everything ---
         receipts = [{
             **receipt,
             "friends": receipt_friends_map.get(receipt["id"], []),
-            "items": items_map.get(receipt["id"], [])
+            "items": [{
+                **item,
+                "friends": item_friends_map.get(item["id"], [])
+            } for item in items_map.get(receipt["id"], [])]
         } for receipt in receipts]
 
         return {"receipts": receipts}
@@ -178,4 +200,62 @@ async def get_all_receipts(user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get receipts: {str(e)}")
 
-    
+@router.post("/receipts/{receipt_id}/items/split")
+async def split_receipt_items(receipt_id: str, items_data: List[dict]):
+	try:
+		print(f"Starting split for receipt_id: {receipt_id}")
+		print(f"Received items_data: {items_data}")
+		
+		receipt = supabase.table("receipts").select("*").eq("id", receipt_id).execute().data
+		print(f"Receipt query result: {receipt}")
+		if not receipt:
+			raise HTTPException(status_code=404, detail="Receipt not found")
+
+		for item_data in items_data:
+			item_id = item_data["id"]
+			friends = item_data["friends"]
+			print(f"\nProcessing item_id: {item_id}")
+			print(f"Friends: {friends}")
+			
+			# calculate amounts
+			item = supabase.table("items").select("id, receipt_id, item_name, quantity, unit_price").eq("id", item_id).execute().data
+			print(f"Item query result: {item}")
+			if not item:
+				raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+			
+			item = item[0]
+			total_price = float(item["unit_price"]) * int(item["quantity"])
+			
+			if not friends:
+				continue
+				
+			num_friends = len(friends)
+			share_percentage = 100 / num_friends
+			amount_per_friend = total_price / num_friends
+			
+			print(f"Total Price: {total_price}, Share %: {share_percentage}, Amount per friend: {amount_per_friend}")
+
+			# friend_item entries for each friend
+			for friend in friends:
+				# if friend_item entry already exists
+				existing_entry = supabase.table("friend_items").select("*").eq("item_id", item_id).eq("friend_id", friend["id"]).execute().data
+				
+				if not existing_entry:
+					friend_item = {
+						"receipt_id": receipt_id,
+						"friend_id": friend["id"],
+						"item_id": item_id,
+						"share_percentage": share_percentage,
+						"amount": amount_per_friend
+					}
+					print(f"Creating friend_item entry: {friend_item}")
+					result = supabase.table("friend_items").insert(friend_item).execute()
+					print(f"Insert result: {result}")
+				else:
+					print(f"Friend item entry already exists for friend {friend['id']} and item {item_id}")
+
+		return {"message": "Items split successfully"}
+
+	except Exception as e:
+		print(f"Error occurred: {str(e)}")
+		raise HTTPException(status_code=500, detail=f"Failed to split items: {str(e)}")

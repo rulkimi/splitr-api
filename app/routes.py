@@ -200,6 +200,7 @@ async def get_all_receipts(user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get receipts: {str(e)}")
 
+# handle remove friend fromm the items
 @router.post("/receipts/{receipt_id}/items/split")
 async def split_receipt_items(receipt_id: str, items_data: List[dict]):
 	try:
@@ -210,6 +211,37 @@ async def split_receipt_items(receipt_id: str, items_data: List[dict]):
 		print(f"Receipt query result: {receipt}")
 		if not receipt:
 			raise HTTPException(status_code=404, detail="Receipt not found")
+        
+		current_friend_items = supabase.table("friend_items").select("*").eq("receipt_id", receipt_id).execute().data
+		print(f"Current friend relations: {current_friend_items}")
+		
+		# friend relations as (item_id, friend_id) pairs
+		current_friend_relations = {
+			(entry["item_id"], entry["friend_id"]) 
+			for entry in current_friend_items
+		}
+		print(f"Current friend relations: {current_friend_relations}")
+		
+		# new friend relations from items_data
+		new_friend_relations = {
+			(item["id"], friend["id"]) 
+			for item in items_data 
+			for friend in item.get("friends", [])
+		}
+		print(f"New friend relations: {new_friend_relations}")
+		
+		#  riend relations that need to be removed (in current but not in new)
+		friend_relations_to_remove = current_friend_relations - new_friend_relations
+		print(f"Friend relations to remove: {friend_relations_to_remove}")
+		
+		if friend_relations_to_remove:
+			print(f"Removing friend relations: {friend_relations_to_remove}")
+			for item_id, friend_id in friend_relations_to_remove:
+				supabase.table("friend_items").delete()\
+					.eq("receipt_id", receipt_id)\
+					.eq("item_id", item_id)\
+					.eq("friend_id", friend_id)\
+					.execute()
 
 		for item_data in items_data:
 			item_id = item_data["id"]
@@ -254,7 +286,46 @@ async def split_receipt_items(receipt_id: str, items_data: List[dict]):
 				else:
 					print(f"Friend item entry already exists for friend {friend['id']} and item {item_id}")
 
-		return {"message": "Items split successfully"}
+		friend_items = supabase.table("friend_items").select("*").eq("receipt_id", receipt_id).execute().data
+		
+		friend_summary = {}
+		for fi in friend_items:
+			friend_id = fi["friend_id"]
+			if friend_id not in friend_summary:
+				friend_summary[friend_id] = {
+					"total_amount": 0,
+					"items": []
+				}
+			
+			item = supabase.table("items").select("*").eq("id", fi["item_id"]).execute().data[0]
+			
+			# tax for this item's share
+			item_tax = (float(item["unit_price"]) * int(item["quantity"]) * (fi["share_percentage"] / 100)) * 0.13
+			
+			friend_summary[friend_id]["total_amount"] += fi["amount"] + item_tax
+			friend_summary[friend_id]["items"].append({
+				"item_name": item["item_name"],
+				"quantity": item["quantity"],
+				"share_percentage": fi["share_percentage"],
+				"amount": fi["amount"],
+				"tax": item_tax
+			})
+		
+		for friend_id in friend_summary:
+			friend = supabase.table("friends").select("name").eq("id", friend_id).execute().data[0]
+			friend_summary[friend_id]["name"] = friend["name"]
+			
+			print(f"\nSummary for {friend['name']}:")
+			print(f"Total Amount: ${friend_summary[friend_id]['total_amount']:.2f}")
+			print("Items:")
+			for item in friend_summary[friend_id]["items"]:
+				print(f"- {item['item_name']} (Qty: {item['quantity']}, Share: {item['share_percentage']}%)")
+				print(f"  Amount: ${item['amount']:.2f}, Tax: ${item['tax']:.2f}")
+		
+		return {
+			"message": "Items split successfully",
+			"summary": friend_summary
+		}
 
 	except Exception as e:
 		print(f"Error occurred: {str(e)}")

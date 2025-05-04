@@ -300,15 +300,20 @@ async def split_receipt_items(receipt_id: str, items_data: List[dict]):
 			item = supabase.table("items").select("*").eq("id", fi["item_id"]).execute().data[0]
 			
 			# tax for this item's share
-			item_tax = (float(item["unit_price"]) * int(item["quantity"]) * (fi["share_percentage"] / 100)) * 0.13
+			item_tax = (float(item["unit_price"]) * int(item["quantity"]) * (fi["share_percentage"] / 100)) * (receipt[0]["tax"] / 100)
 			
-			friend_summary[friend_id]["total_amount"] += fi["amount"] + item_tax
+			item_service_charge = 0
+			if receipt[0].get("service_charge"):
+				item_service_charge = (float(item["unit_price"]) * int(item["quantity"]) * (fi["share_percentage"] / 100)) * (receipt[0]["service_charge"] / 100)
+			
+			friend_summary[friend_id]["total_amount"] += fi["amount"] + item_tax + item_service_charge
 			friend_summary[friend_id]["items"].append({
 				"item_name": item["item_name"],
 				"quantity": item["quantity"],
 				"share_percentage": fi["share_percentage"],
 				"amount": fi["amount"],
-				"tax": item_tax
+				"tax": item_tax,
+				"service_charge": item_service_charge
 			})
 		
 		for friend_id in friend_summary:

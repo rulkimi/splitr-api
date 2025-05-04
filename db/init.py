@@ -1,4 +1,3 @@
-import os
 from supabase import create_client, Client
 from app.config import SUPABASE_URL, SUPABASE_KEY
 
@@ -7,3 +6,5 @@ def create_supabase_client():
     key: str = SUPABASE_KEY
     supabase: Client = create_client(url, key)
     return supabase
+
+supabase: Client = create_supabase_client()

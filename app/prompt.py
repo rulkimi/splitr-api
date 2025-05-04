@@ -10,6 +10,7 @@ def create_analysis_prompt() -> str:
 	1. Main Item Format:
 	   - Lines starting with "1x *" are main items
 	   - Extract their base price from the "U.P" column
+		 - Tax and service charges are 2 different prices, do not duplicate them into the same amount.
 	
 	2. Modification Format:
 	   - Lines starting with "-" or indented under main items are modifications

@@ -202,17 +202,20 @@ def generate_friend_summary(receipt_id, receipt):
     friend_items = supabase.table("friend_items").select("*").eq("receipt_id", receipt_id).execute().data
     summary = {}
     
+    friend_ids = set(fi["friend_id"] for fi in friend_items)
+    num_friends = len(friend_ids)
+    service_charge = receipt.get("service_charge", 0) / num_friends
+
     for fi in friend_items:
         fid = fi["friend_id"]
         if fid not in summary:
-            summary[fid] = {"total_amount": 0, "items": []}
+            summary[fid] = {"total_amount": 0, "service_charge": 0, "items": []}
         
         item = supabase.table("items").select("*").eq("id", fi["item_id"]).execute().data[0]
         base = float(item["unit_price"]) * int(item["quantity"])
         share = fi["share_percentage"] / 100
 
         tax = base * share * (receipt["tax"] / 100)
-        service_charge = base * share * (receipt.get("service_charge", 0) / 100)
 
         summary[fid]["total_amount"] += fi["amount"] + tax + service_charge
         summary[fid]["items"].append({
@@ -221,11 +224,13 @@ def generate_friend_summary(receipt_id, receipt):
             "share_percentage": fi["share_percentage"],
             "amount": fi["amount"],
             "tax": tax,
-            "service_charge": service_charge
         })
     
     for fid in summary:
-        friend = supabase.table("friends").select("name").eq("id", fid).execute().data[0]
+        friend = supabase.table("friends").select("name, photo").eq("id", fid).execute().data[0]
         summary[fid]["name"] = friend["name"]
+        summary[fid]["photo"] = friend["photo"]
+        summary[fid]["service_charge"] = service_charge
     
+    print(json.dumps(summary))
     return summary
